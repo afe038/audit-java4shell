@@ -1,6 +1,6 @@
 # CVE-2026-114938 (Java4Shell) — Ubuntu and Docker JVM Audit
 
-`audit-java4shell.sh` is a **read-only, best-effort inventory and exposure assessment** for CVE-2026-114938 on Ubuntu/Linux servers. It checks detected host JVMs and the JVMs it can reach in **running Docker containers**, then reports whether their runtime versions and CPU capabilities suggest exposure.
+`audit-java4shell-v1.4.sh` is a **read-only, best-effort inventory and exposure assessment** for CVE-2026-114938 on Ubuntu/Linux servers. It checks detected host JVMs and the JVMs it can reach in **running Docker containers**, then reports whether their runtime versions and CPU capabilities suggest exposure.
 
 It is intended for security operations, server inventory, and triage. **It is not an exploit test or a comprehensive vulnerability scanner.** A clean result only covers the JVMs and locations actually inspected.
 
@@ -9,35 +9,35 @@ It is intended for security operations, server inventory, and triage. **It is no
 - Ubuntu 20.04, 22.04, 24.04 or newer (also usable on other Linux systems with the required utilities).
 - Bash 4 or newer; `/proc`; common GNU tools including `readlink`, `stat`, `find`, `awk`, `sed`, `sort`, `timeout`, `date` and `hostname`.
 - `pgrep` (from `procps`) for running-Java-process discovery.
-- **Root privileges recommended** to inspect JVM executables owned by other users and access Docker.
+- **Run with root privileges** to inspect JVM executables owned by other users and access Docker. Non-root execution is permitted for partial troubleshooting but explicitly records a `REVIEW` finding and cannot produce a clean exit status.
 - Docker CLI **optional**. If installed, its daemon must be reachable to inspect running containers. The script does not install Docker or require it for host-only checks.
 - Container-based detection is best-effort: for full discovery the container should have `sh` and a runnable Java executable; shell-less images receive additional direct-path probes.
 
 ## Quick start
 
-Copy `audit-java4shell.sh` to the server and run:
+Copy `audit-java4shell-v1.4.sh` to the server and run:
 
 ```bash
-chmod +x audit-java4shell.sh
-sudo ./audit-java4shell.sh
+chmod +x audit-java4shell-v1.4.sh
+sudo ./audit-java4shell-v1.4.sh
 ```
 
 To check only the host (skip Docker):
 
 ```bash
-sudo ./audit-java4shell.sh --no-docker
+sudo ./audit-java4shell-v1.4.sh --no-docker
 ```
 
 To see supported options:
 
 ```bash
-./audit-java4shell.sh --help
+./audit-java4shell-v1.4.sh --help
 ```
 
 To save a dated report **and preserve the script's exit status**:
 
 ```bash
-sudo bash -o pipefail -c './audit-java4shell.sh | tee "java4shell-$(hostname -s)-$(date -u +%F).txt"'
+sudo bash -o pipefail -c './audit-java4shell-v1.4.sh | tee "java4shell-$(hostname -s)-$(date -u +%F).txt"'
 ```
 
 The saved report can contain hostnames, container names, image names, usernames, and JVM paths. Handle it according to your operational-data retention policy.
@@ -56,7 +56,7 @@ The saved report can contain hostnames, container names, image names, usernames,
 | Stopped Docker containers | Counts exited containers, but does **not** scan or start them |
 | Unused Docker images | Does **not** scan them |
 
-Each runtime is reported with its context/location, executable path, version, identified distribution, and assessment. The script **does not print full process arguments, environment variables, or application configuration values**.
+Each runtime is reported with its context/location, executable path, version, identified distribution, and assessment. Host discovery uses a short-lived private temporary file to collect executable paths and accurately detect `find` permission errors; the file is deleted at exit. An unreadable directory is reported as `REVIEW` rather than causing an uncaught audit error. The script **does not print full process arguments, environment variables, or application configuration values**.
 
 **Note:** This audit invokes Java executables with `-version`, including within running containers. Use it only on systems and container images you trust; it does not execute an exploit payload, but a nonstandard or malicious `java` executable could behave unexpectedly.
 
@@ -90,7 +90,7 @@ If both potential-risk and review findings exist, the script exits **1** (risk t
 Example, preserving the exit code while printing the report:
 
 ```bash
-sudo ./audit-java4shell.sh
+sudo ./audit-java4shell-v1.4.sh
 rc=$?
 case "$rc" in
   0) echo 'No current exposure identified in assessed scope' ;;
@@ -99,9 +99,13 @@ case "$rc" in
 esac
 ```
 
+## Fixed in v1.4: installed-JVM inventory errors
+
+When `find` cannot read part of `/opt` or another search directory (especially when run without `sudo`), v1.3 could print `AUDIT ERROR near line 285` from its process-substitution error trap. Version 1.4 detects the `find` exit status in the parent process, reports `REVIEW: could not completely inventory ...`, continues checking all other discovered JVMs, and returns exit code `2` unless a potential risk takes precedence. Running without root privileges also produces an explicit `REVIEW` finding.
+
 ## Docker-owned Java processes in the host process table
 
-Docker JVMs also appear in the host's process table. Executing their `/proc/<PID>/exe` directly on the host can fail to load container-only libraries such as `libjli.so`. Version 1.3 uses PID-only `docker top` output for local Docker containers to associate those processes with containers **without reading JVM command arguments**. It then checks the runtime from inside the container using `docker exec`. A deferred process is only considered covered if its JVM executable path was successfully checked in that same container. If association or verification is unsuccessful, the result remains `REVIEW` rather than silently becoming clean.
+Docker JVMs also appear in the host's process table. Executing their `/proc/<PID>/exe` directly on the host can fail to load container-only libraries such as `libjli.so`. Version 1.4 uses PID-only `docker top` output for local Docker containers to associate those processes with containers **without reading JVM command arguments**. It then checks the runtime from inside the container using `docker exec`. A deferred process is only considered covered if its JVM executable path was successfully checked in that same container. If association or verification is unsuccessful, the result remains `REVIEW` rather than silently becoming clean.
 
 ## Docker behavior and important caveats
 
@@ -141,8 +145,8 @@ The script makes no changes to installed software and does not restart services.
 ## Files
 
 ```text
-audit-java4shell.sh    Bash scanner
-README.md              This guide
+audit-java4shell-v1.4.sh    Bash scanner
+README-audit-java4shell-v1.4.md    This guide
 ```
 
 ## Scope of the conclusion

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CVE-2026-114938 / Java4Shell conservative Ubuntu + Docker inventory
-# Full script v1.3 - keep the entire file, not only the last section.
+# Full script v1.4 - keep the entire file, not only the last section.
 # Read-only. Does not print Java arguments, process environments, or Docker env.
 # Requires: Bash 4+, GNU coreutils, /proc. Docker CLI optional.
 # 0 = no currently identified risk / checks complete
@@ -10,6 +10,15 @@
 set -Eeuo pipefail
 # Unexpected execution errors must never produce a misleading clean audit.
 trap 'status=$?; printf "AUDIT ERROR near line %s (status %s). Result is INCOMPLETE.\n" "$LINENO" "$status" >&2; exit 2' ERR
+# Host discovery uses a private temporary inventory file so find(1) failures
+# can be detected reliably (unlike process substitution with an ERR trap).
+SCAN_TEMP=''
+cleanup_scan_temp() {
+    if [[ -n "$SCAN_TEMP" ]]; then
+        rm -f -- "$SCAN_TEMP"
+    fi
+}
+trap cleanup_scan_temp EXIT
 export LC_ALL=C
 
 CVE='CVE-2026-114938'
@@ -221,6 +230,10 @@ say "Architecture: $ARCH"
 say "Exposed CPU flags required (avx512f, avx512bw, avx512vbmi, bmi2): $CPU"
 say 'Scope: host running Java + known installed Java paths + running Docker containers'
 say 'No process argument lists, environment variables or application data are printed.'
+if (( EUID != 0 )); then
+    say 'REVIEW: audit is not running as root; some process and filesystem checks may be inaccessible. Rerun using sudo.'
+    ((REVIEW+=1))
+fi
 
 # Build a local Docker PID index using PID-only docker top output; do not use
 # docker top's default full-command view because it can disclose JVM secrets.
@@ -282,11 +295,19 @@ if command -v java >/dev/null 2>&1; then
     CANDIDATES+=("$(command -v java)")
 fi
 if [[ -n "${JAVA_HOME:-}" ]]; then CANDIDATES+=("$JAVA_HOME/bin/java"); fi
+SCAN_TEMP="$(mktemp "${TMPDIR:-/tmp}/java4shell-discovery.XXXXXXXX")"
 for root in /usr/lib/jvm /opt /usr/local/java /usr/local/lib/jvm /usr/local/jvm; do
     [[ -d "$root" ]] || continue
+    # Read partial results when possible, but treat denied directories / I/O
+    # errors as REVIEW rather than silently assuming the inventory is complete.
+    if ! find "$root" -maxdepth 6 \( -type f -o -type l \) \
+            -name java -path '*/bin/java' -print0 > "$SCAN_TEMP" 2>/dev/null; then
+        say "REVIEW: could not completely inventory Java executables under $root (permission or filesystem error)."
+        ((REVIEW+=1))
+    fi
     while IFS= read -r -d '' candidate; do
         CANDIDATES+=("$candidate")
-    done < <(find "$root" -maxdepth 6 \( -type f -o -type l \) -name java -path '*/bin/java' -print0 2>/dev/null)
+    done < "$SCAN_TEMP"
 done
 for candidate in "${CANDIDATES[@]}"; do
     [[ -x "$candidate" ]] || continue
